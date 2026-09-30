@@ -1,0 +1,47 @@
+origem: 'C:\Users\00063924\OneDrive - Randoncorp SA\Shortcuts\Frasle R&D GCC - 03-01_Laboratory_FSA'
+saida: './saida'
+banco: './saida/historico_dinamometro.sqlite'
+extensoes: ['.xlsx', '.xlsm', '.xltx', '.xltm', '.xls', '.xlsb']
+filtro_nome_regex: '(?i)(DC|DL)'
+limite_cabecalho_linhas: 40
+limite_cabecalho_colunas: 30
+salvar_arquivos_imagem: true
+armazenar_blob: true
+usar_excel_com_para_formatos_legados: true
+categorias:
+  componente:
+    - componente
+    - pastilha
+    - disco
+    - tambor
+    - lona
+    - corpo de prova
+    - amostra
+  avaria:
+    - avaria
+    - falha
+    - trinca
+    - fissura
+    - quebra
+    - desgaste
+    - dano
+    - delaminacao
+  resultado:
+    - resultado
+    - grafico
+    - curva
+    - relatorio
+    - medicao
+    - temperatura
+  montagem:
+    - montagem
+    - instalacao
+    - setup
+    - dinamometro
+    - bancada
+  identificacao:
+    - etiqueta
+    - identificacao
+    - codigo
+    - serial
+    - lote
