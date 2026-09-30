@@ -50,6 +50,10 @@ def init_db(c):
     CREATE VIEW IF NOT EXISTS vw_imagens_consulta AS SELECT i.id_imagem,i.numero_ensaio,a.arquivo_nome,a.caminho_origem,i.aba_origem,i.etapa_ensaio,i.classificacao_imagem,i.status_classificacao,i.ancora_celula,i.referencia_imagem,i.nome_interno,i.mime_type,i.extensao,i.largura_px,i.altura_px,i.tamanho_bytes,i.arquivo_imagem,i.hash_imagem,i.data_processamento FROM imagens i JOIN arquivos a ON a.id=i.arquivo_id;
     CREATE VIEW IF NOT EXISTS vw_resumo_arquivos AS SELECT a.id,a.numero_ensaio,a.arquivo_nome,a.caminho_origem,a.status,a.total_imagens,a.ultimo_processamento,COUNT(i.id_imagem) AS imagens_no_banco,SUM(CASE WHEN i.status_classificacao='pendente' THEN 1 ELSE 0 END) AS pendentes FROM arquivos a LEFT JOIN imagens i ON i.arquivo_id=a.id GROUP BY a.id;
     ''')
+    # Migracao leve para bancos criados por versoes anteriores.
+    cols={r[1] for r in c.execute('PRAGMA table_info(arquivos)')}
+    if 'versao_extrator' not in cols:
+        c.execute('ALTER TABLE arquivos ADD COLUMN versao_extrator INTEGER NOT NULL DEFAULT 0')
 
 def extract_dl(name, text=''):
     pats=[r'(?i)\b(?:DL|DC)[\s_.-]*\d+[A-Z0-9_.-]*',r'(?i)\b(?:DL|DC)[A-Z0-9_.-]+']
@@ -87,35 +91,93 @@ def stage(sheet, nearby):
         if token in f'{sheet} {nearby}'.casefold(): return token
     return sheet
 
+def _rels_map(z, owner_path):
+    """Retorna os relacionamentos de qualquer parte OOXML."""
+    parent=str(Path(owner_path).parent).replace('\\','/')
+    rel_path=f'{parent}/_rels/{Path(owner_path).name}.rels'
+    try:
+        root=ET.fromstring(z.read(rel_path))
+    except KeyError:
+        return {}
+    return {
+        e.attrib.get('Id'): {
+            'target': e.attrib.get('Target',''),
+            'type': e.attrib.get('Type',''),
+            'mode': e.attrib.get('TargetMode','Internal')
+        }
+        for e in root
+    }
+
+
+def _cell_a1(col_zero, row_zero):
+    col=col_zero+1; letters=''
+    while col:
+        col, rem=divmod(col-1,26); letters=chr(65+rem)+letters
+    return f'{letters}{row_zero+1}'
+
+
 def xlsx_images(path, sheet_rows):
-    out=[]
+    """Extrai imagens de TODAS as planilhas, inclusive ocultas e muito ocultas.
+
+    A rotina percorre todos os relacionamentos de desenho de cada worksheet,
+    em vez de considerar somente a primeira tag <drawing>. Tambem percorre
+    imagens dentro de grupos e mantem aba, ancora e referencia OOXML.
+    """
+    out=[]; emitted=set()
     with zipfile.ZipFile(path) as z:
-        wb=ET.fromstring(z.read('xl/workbook.xml'))
-        rels=ET.fromstring(z.read('xl/_rels/workbook.xml.rels'))
-        wbrel={e.attrib['Id']:e.attrib['Target'] for e in rels}
-        for sh in wb.find('m:sheets',NS):
-            title=sh.attrib['name']; rid=sh.attrib.get('{%s}id'%NS['r']); sheet_path=norm_target('xl',wbrel[rid])
-            try: root=ET.fromstring(z.read(sheet_path))
-            except KeyError: continue
-            drawing=root.find('m:drawing',NS)
-            if drawing is None: continue
-            drid=drawing.attrib.get('{%s}id'%NS['r']); relpath=str(Path(sheet_path).parent).replace('\\','/')+'/_rels/'+Path(sheet_path).name+'.rels'
-            srels=ET.fromstring(z.read(relpath)); st={e.attrib['Id']:e.attrib['Target'] for e in srels}; draw_path=norm_target(str(Path(sheet_path).parent).replace('\\','/'),st[drid])
-            droot=ET.fromstring(z.read(draw_path)); drels_path=str(Path(draw_path).parent).replace('\\','/')+'/_rels/'+Path(draw_path).name+'.rels'; drels=ET.fromstring(z.read(drels_path)); dt={e.attrib['Id']:e.attrib['Target'] for e in drels}
-            idx=0
-            for anchor in list(droot):
-                blip=anchor.find('.//a:blip',NS)
-                if blip is None: continue
-                erid=blip.attrib.get('{%s}embed'%NS['r']); target=dt.get(erid)
-                if not target: continue
-                media=norm_target(str(Path(draw_path).parent).replace('\\','/'),target); data=z.read(media); idx+=1
-                fr=anchor.find('xdr:from',NS); col=row=0
-                if fr is not None:
-                    col=int(fr.findtext('xdr:col','0',NS)); row=int(fr.findtext('xdr:row','0',NS))
-                cell=f'{col+1},{row+1}'
-                nearby=' | '.join(sheet_rows.get(title,[])[max(0,row-3):row+4])[:3000]
-                name=Path(media).name; ref=f'{title}|{qname(anchor.tag)}|{cell}|{idx}|{name}'
-                out.append(dict(sheet=title,data=data,name=name,ref=ref,anchor=cell,nearby=nearby))
+        workbook_path='xl/workbook.xml'
+        wb=ET.fromstring(z.read(workbook_path))
+        wb_rels=_rels_map(z,workbook_path)
+        sheets=wb.find('m:sheets',NS)
+        if sheets is None: return out
+        for sh in list(sheets):
+            title=sh.attrib.get('name','sem_aba')
+            rid=sh.attrib.get('{%s}id'%NS['r'])
+            rel=wb_rels.get(rid)
+            if not rel or rel['mode']=='External': continue
+            sheet_path=norm_target('xl',rel['target'])
+            try: sheet_root=ET.fromstring(z.read(sheet_path))
+            except (KeyError,ET.ParseError): continue
+            sheet_rels=_rels_map(z,sheet_path)
+            drawing_ids=[]
+            # Todos os drawings declarados na planilha.
+            for node in sheet_root.findall('.//m:drawing',NS):
+                drid=node.attrib.get('{%s}id'%NS['r'])
+                if drid: drawing_ids.append(drid)
+            # Fallback: alguns geradores gravam o relacionamento, mas a tag
+            # fica em uma extensao XML que openpyxl nem sempre interpreta.
+            for drid,info in sheet_rels.items():
+                if info['type'].endswith('/drawing') and drid not in drawing_ids:
+                    drawing_ids.append(drid)
+            sheet_index=0
+            for drid in drawing_ids:
+                drel=sheet_rels.get(drid)
+                if not drel or drel['mode']=='External': continue
+                draw_path=norm_target(str(Path(sheet_path).parent).replace('\\','/'),drel['target'])
+                try: droot=ET.fromstring(z.read(draw_path))
+                except (KeyError,ET.ParseError): continue
+                draw_rels=_rels_map(z,draw_path)
+                for anchor in list(droot):
+                    fr=anchor.find('xdr:from',NS); col=row=0
+                    if fr is not None:
+                        col=int(fr.findtext('xdr:col','0',NS)); row=int(fr.findtext('xdr:row','0',NS))
+                    cell=_cell_a1(col,row)
+                    nearby=' | '.join(sheet_rows.get(title,[])[max(0,row-3):row+4])[:3000]
+                    # .// encontra imagens normais e imagens dentro de grupos.
+                    for blip in anchor.findall('.//a:blip',NS):
+                        erid=blip.attrib.get('{%s}embed'%NS['r'])
+                        if not erid: continue  # imagem apenas vinculada, sem binario incorporado
+                        irel=draw_rels.get(erid)
+                        if not irel or irel['mode']=='External': continue
+                        media=norm_target(str(Path(draw_path).parent).replace('\\','/'),irel['target'])
+                        try: data=z.read(media)
+                        except KeyError: continue
+                        sheet_index+=1; name=Path(media).name
+                        ref=f'{title}|{draw_path}|{qname(anchor.tag)}|{cell}|{sheet_index}|{name}'
+                        unique=(title,draw_path,erid,cell,sheet_index)
+                        if unique in emitted: continue
+                        emitted.add(unique)
+                        out.append(dict(sheet=title,data=data,name=name,ref=ref,anchor=cell,nearby=nearby))
     return out
 
 def legacy_images_com(path):
@@ -154,7 +216,7 @@ def save_report(outdir, exec_id, summary, details):
 
 def main():
     ap=argparse.ArgumentParser(); ap.add_argument('--config',default='config.yaml'); args=ap.parse_args()
-    cfg=yaml.safe_load(Path(args.config).read_text(encoding='utf-8')); source=Path(cfg['origem']); outdir=Path(cfg['saida']).resolve(); outdir.mkdir(parents=True,exist_ok=True); (outdir/'logs').mkdir(exist_ok=True)
+    cfg=yaml.safe_load(Path(args.config).read_text(encoding='utf-8')); extractor_version=int(cfg.get('versao_extrator',3)); source=Path(cfg['origem']); outdir=Path(cfg['saida']).resolve(); outdir.mkdir(parents=True,exist_ok=True); (outdir/'logs').mkdir(exist_ok=True)
     logging.basicConfig(level=logging.INFO,format='%(asctime)s | %(levelname)s | %(message)s',handlers=[logging.FileHandler(outdir/'logs/processamento.log',encoding='utf-8'),logging.StreamHandler(sys.stdout)])
     if not source.exists(): raise SystemExit(f'Origem nao encontrada: {source}')
     db=Path(cfg['banco']).resolve(); con=sqlite3.connect(db); con.row_factory=sqlite3.Row; init_db(con)
@@ -171,7 +233,7 @@ def main():
         LOG.info('[%s/%s] %s',n,len(candidates),p)
         try:
             st=p.stat(); existing=con.execute('SELECT * FROM arquivos WHERE caminho_origem=?',(str(p),)).fetchone()
-            if existing and existing['tamanho_bytes']==st.st_size and existing['modificado_ns']==st.st_mtime_ns and existing['status']=='sucesso':
+            if existing and existing['tamanho_bytes']==st.st_size and existing['modificado_ns']==st.st_mtime_ns and existing['status']=='sucesso' and existing['versao_extrator']==extractor_version:
                 stats['ignorados']+=1; details.append({'caminho':str(p),'status':'inalterado','imagens':existing['total_imagens'],'mensagem':''}); continue
             filehash=sha256_file(p); sheets={}; headers=[]
             if p.suffix.lower() in OOXML:
@@ -179,7 +241,7 @@ def main():
             elif cfg.get('usar_excel_com_para_formatos_legados',True): imgs=legacy_images_com(p)
             else: raise RuntimeError('Formato legado desabilitado')
             header_text='\n'.join(headers); dl=extract_dl(p.stem,header_text); header_json=json.dumps(headers,ensure_ascii=False)
-            con.execute('''INSERT INTO arquivos(caminho_origem,arquivo_nome,extensao,tamanho_bytes,modificado_ns,hash_arquivo,numero_ensaio,cabecalho_json,status,total_imagens,ultimo_processamento) VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(caminho_origem) DO UPDATE SET arquivo_nome=excluded.arquivo_nome,extensao=excluded.extensao,tamanho_bytes=excluded.tamanho_bytes,modificado_ns=excluded.modificado_ns,hash_arquivo=excluded.hash_arquivo,numero_ensaio=excluded.numero_ensaio,cabecalho_json=excluded.cabecalho_json,status='processando',ultimo_processamento=excluded.ultimo_processamento''',(str(p),p.name,p.suffix.lower(),st.st_size,st.st_mtime_ns,filehash,dl,header_json,'processando',0,now()))
+            con.execute('''INSERT INTO arquivos(caminho_origem,arquivo_nome,extensao,tamanho_bytes,modificado_ns,hash_arquivo,numero_ensaio,cabecalho_json,status,total_imagens,ultimo_processamento,versao_extrator) VALUES(?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(caminho_origem) DO UPDATE SET arquivo_nome=excluded.arquivo_nome,extensao=excluded.extensao,tamanho_bytes=excluded.tamanho_bytes,modificado_ns=excluded.modificado_ns,hash_arquivo=excluded.hash_arquivo,numero_ensaio=excluded.numero_ensaio,cabecalho_json=excluded.cabecalho_json,status='processando',ultimo_processamento=excluded.ultimo_processamento,versao_extrator=excluded.versao_extrator''',(str(p),p.name,p.suffix.lower(),st.st_size,st.st_mtime_ns,filehash,dl,header_json,'processando',0,now(),extractor_version))
             fid=con.execute('SELECT id FROM arquivos WHERE caminho_origem=?',(str(p),)).fetchone()[0]; seen=[]; inserted=0
             for im in imgs:
                 hsh=sha256_bytes(im['data']); seen.append((im['ref'],hsh)); cat,status=classify(cfg,im['sheet'],im['nearby'],headers); et=stage(im['sheet'],im['nearby']); mime,ext,w,h=image_meta(im['data'],im['name'])

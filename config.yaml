@@ -1,3 +1,4 @@
+versao_extrator: 3
 origem: 'C:\Users\00063924\OneDrive - Randoncorp SA\Shortcuts\Frasle R&D GCC - 03-01_Laboratory_FSA'
 saida: './saida'
 banco: './saida/historico_dinamometro.sqlite'
