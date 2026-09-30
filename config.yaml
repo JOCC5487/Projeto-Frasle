@@ -1,5 +1,5 @@
 versao_extrator: 3
-origem: 'C:\Users\00063924\OneDrive - Randoncorp SA\Shortcuts\Frasle R&D GCC - 03-01_Laboratory_FSA'
+origem: 'C:\Users\00063924\OneDrive - Randoncorp SA\Shortcuts\Frasle R&D GCC - 03-01_Laboratory_FSA\81 - Desenvolver Produtos Novos\40 - PC\058 - JOST APS\2022'
 saida: './saida'
 banco: './saida/historico_dinamometro.sqlite'
 extensoes: ['.xlsx', '.xlsm', '.xltx', '.xltm', '.xls', '.xlsb']

@@ -1,0 +1,46 @@
+banco: './saida/historico_dinamometro.sqlite'
+log: './saida/logs/pos_processamento_ml.log'
+relatorio_revisao: './saida/relatorios/revisao_ml.csv'
+
+# -1 = CPU. Para NVIDIA/CUDA configurada, use 0.
+device: -1
+modelo: 'openai/clip-vit-base-patch32'
+versao_modelo: '1'
+commit_a_cada: 10
+
+limiares:
+  automatico: 0.72
+  revisao: 0.50
+
+logos:
+  pasta_referencias: './referencias_ml/logos'
+  distancia_phash_maxima: 8
+
+tipos_ignorados:
+  - logo
+  - imagem_decorativa
+
+# As frases descritivas aumentam a clareza da comparacao visual.
+tipos_visuais:
+  logo: 'um logotipo empresarial isolado ou uma marca grafica corporativa'
+  desenho_tecnico: 'um desenho tecnico de engenharia de uma peca mecanica com linhas e cotas'
+  fotografia_peca: 'uma fotografia real de uma peca ou componente mecanico de freio'
+  bancada_dinamometro: 'uma fotografia real de uma bancada de dinamometro ou equipamento de laboratorio'
+  grafico_resultado: 'um grafico, curva ou resultado visual de um ensaio de laboratorio'
+  etiqueta_identificacao: 'uma etiqueta de identificacao com codigo, numero de serie ou lote'
+  documento_digitalizado: 'uma pagina de documento ou formulario digitalizado'
+  captura_de_tela: 'uma captura de tela de software ou sistema de computador'
+  imagem_decorativa: 'uma imagem decorativa sem relacao tecnica com o ensaio'
+
+# Ajuste esta lista para as pecas realmente existentes no laboratorio.
+categorias_pecas:
+  pastilha_freio: 'uma fotografia real de uma pastilha de freio automotiva'
+  disco_freio: 'uma fotografia real de um disco de freio automotivo'
+  tambor_freio: 'uma fotografia real de um tambor de freio automotivo'
+  lona_freio: 'uma fotografia real de uma lona de freio'
+  sapata_freio: 'uma fotografia real de uma sapata de freio'
+  pinca_freio: 'uma fotografia real de uma pinca de freio'
+  corpo_de_prova: 'uma fotografia real de um corpo de prova de laboratorio'
+  conjunto_freio: 'uma fotografia real de um conjunto de freio montado'
+  componente_metalico: 'uma fotografia real de um componente metalico mecanico'
+  peca_nao_identificada: 'uma fotografia real de uma peca mecanica nao identificada'
