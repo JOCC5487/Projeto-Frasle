@@ -56,7 +56,7 @@ def init_db(c):
         c.execute('ALTER TABLE arquivos ADD COLUMN versao_extrator INTEGER NOT NULL DEFAULT 0')
 
 def extract_dl(name, text=''):
-    pats=[r'(?i)\b(?:DL|DC)[\s_.-]*\d+[A-Z0-9_.-]*',r'(?i)\b(?:DL|DC)[A-Z0-9_.-]+']
+    pats=[r'(?i)\b(?:DL|DC)[\s_.-]*\d+']
     for src in (name,text):
         for p in pats:
             m=re.search(p,src)
@@ -248,11 +248,27 @@ def main():
                 imgpath=None
                 if cfg.get('salvar_arquivos_imagem',True):
                     folder=outdir/'imagens'/safe(dl or 'sem_dl')/safe(p.stem); folder.mkdir(parents=True,exist_ok=True); imgpath=folder/f'{safe(im["sheet"])}_{safe(im["anchor"])}_{hsh[:12]}{ext}'; imgpath.write_bytes(im['data'])
-                before=con.total_changes
-                con.execute('''INSERT OR IGNORE INTO imagens(arquivo_id,numero_ensaio,aba_origem,etapa_ensaio,classificacao_imagem,status_classificacao,dados_cabecalho,dados_relacionados,referencia_imagem,ancora_celula,nome_interno,mime_type,extensao,largura_px,altura_px,tamanho_bytes,hash_imagem,arquivo_imagem,imagem_blob,data_processamento) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',(fid,dl,im['sheet'],et,cat,status,header_json,im['nearby'],im['ref'],im['anchor'],im['name'],mime,ext,w,h,len(im['data']),hsh,str(imgpath) if imgpath else None,sqlite3.Binary(im['data']) if cfg.get('armazenar_blob',True) else None,now()))
-                if con.total_changes>before: inserted+=1
-                else: stats['duplicadas']+=1
-                if status=='pendente': stats['pendentes']+=1
+                existed = con.execute(
+                    'SELECT 1 FROM imagens WHERE arquivo_id=? AND referencia_imagem=? AND hash_imagem=?',
+                    (fid, im['ref'], hsh),
+                ).fetchone() is not None
+                con.execute('''INSERT INTO imagens(arquivo_id,numero_ensaio,aba_origem,etapa_ensaio,classificacao_imagem,status_classificacao,dados_cabecalho,dados_relacionados,referencia_imagem,ancora_celula,nome_interno,mime_type,extensao,largura_px,altura_px,tamanho_bytes,hash_imagem,arquivo_imagem,imagem_blob,data_processamento) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                    ON CONFLICT(arquivo_id,referencia_imagem,hash_imagem) DO UPDATE SET
+                    numero_ensaio=excluded.numero_ensaio,aba_origem=excluded.aba_origem,
+                    etapa_ensaio=excluded.etapa_ensaio,classificacao_imagem=excluded.classificacao_imagem,
+                    status_classificacao=excluded.status_classificacao,dados_cabecalho=excluded.dados_cabecalho,
+                    dados_relacionados=excluded.dados_relacionados,ancora_celula=excluded.ancora_celula,
+                    nome_interno=excluded.nome_interno,mime_type=excluded.mime_type,extensao=excluded.extensao,
+                    largura_px=excluded.largura_px,altura_px=excluded.altura_px,tamanho_bytes=excluded.tamanho_bytes,
+                    arquivo_imagem=excluded.arquivo_imagem,imagem_blob=excluded.imagem_blob,
+                    data_processamento=excluded.data_processamento''',
+                    (fid,dl,im['sheet'],et,cat,status,header_json,im['nearby'],im['ref'],im['anchor'],im['name'],mime,ext,w,h,len(im['data']),hsh,str(imgpath) if imgpath else None,sqlite3.Binary(im['data']) if cfg.get('armazenar_blob',True) else None,now()))
+                if existed:
+                    stats['duplicadas'] += 1
+                else:
+                    inserted += 1
+                if status == 'pendente':
+                    stats['pendentes'] += 1
             if seen:
                 valid={(r,h) for r,h in seen}; old=con.execute('SELECT id_imagem,referencia_imagem,hash_imagem,arquivo_imagem FROM imagens WHERE arquivo_id=?',(fid,)).fetchall()
                 for r in old:
@@ -266,5 +282,5 @@ def main():
         except Exception as e:
             con.rollback(); stats['com_erro']+=1; LOG.exception('Falha em %s',p); con.execute('INSERT INTO erros(execucao_id,caminho_origem,etapa,tipo_erro,mensagem,data_erro) VALUES(?,?,?,?,?,?)',(eid,str(p),'processamento',type(e).__name__,str(e)[:4000],now())); con.commit(); details.append({'caminho':str(p),'status':'erro','imagens':0,'mensagem':str(e)})
     status='concluido_com_erros' if stats['com_erro'] else 'concluido'
-    con.execute('''UPDATE execucoes SET fim=?,status=?,arquivos_avaliados=?,processados=?,ignorados=?,sem_imagens=?,com_erro=?,imagens_extraidas=?,duplicadas=?,pendentes=? WHERE id=?''',(now(),status,*stats.values(),eid)); con.commit(); summary={'execucao_id':eid,'status':status,**stats}; save_report(outdir,eid,summary,details); con.close(); print(json.dumps(summary,ensure_ascii=False,indent=2))
+    con.execute('''UPDATE execucoes SET fim=?,status=?,arquivos_avaliados=?,processados=?,ignorados=?,sem_imagens=?,com_erro=?,imagens_extraidas=?,duplicadas=?,pendentes=? WHERE id=?''',(now(), status, stats['arquivos_avaliados'], stats['processados'], stats['ignorados'], stats['sem_imagens'], stats['com_erro'], stats['imagens_extraidas'], stats['duplicadas'], stats['pendentes'], eid)); con.commit(); summary={'execucao_id':eid,'status':status,**stats}; save_report(outdir,eid,summary,details); con.close(); print(json.dumps(summary,ensure_ascii=False,indent=2))
 if __name__=='__main__': main()

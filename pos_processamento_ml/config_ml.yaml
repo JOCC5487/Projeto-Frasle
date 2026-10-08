@@ -13,7 +13,7 @@ limiares:
   revisao: 0.50
 
 logos:
-  pasta_referencias: './referencias_ml/logos'
+  pasta_referencias: './pos_processamento_ml/referencias_ml/logos'
   distancia_phash_maxima: 8
 
 tipos_ignorados:

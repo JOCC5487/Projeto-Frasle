@@ -145,6 +145,8 @@ def build_classifier(model_name, device):
 
 
 def rank(classifier, im, labels):
+    if not labels:
+        raise ValueError('Nenhuma categoria foi configurada para classificacao')
     result=classifier(im, candidate_labels=list(labels.values()))
     reverse={v:k for k,v in labels.items()}
     ranked=[]
@@ -200,7 +202,7 @@ def export_review(c, output):
     output=Path(output); output.parent.mkdir(parents=True, exist_ok=True)
     rows=c.execute("""
       SELECT * FROM vw_imagens_pos_processadas
-       WHERE status_processamento='revisao_pendente' OR revisado_manualmente=0
+       WHERE status_processamento='revisao_pendente' AND revisado_manualmente=0
        ORDER BY confianca ASC, id_imagem
     """).fetchall()
     if not rows:

@@ -1,5 +1,5 @@
 transformers[torch]>=4.45,<6
-Pillow>=10,<13
+Pillow>=10,<12
 PyYAML>=6,<7
 ImageHash>=4.3,<5
 safetensors>=0.4
